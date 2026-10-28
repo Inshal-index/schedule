@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+    <title>Edit class schedule</title>
+</head>
+<body data-admin="true">
+    <header class="site-header">
+        <a class="site-title" href="index.html">Class-2 Schedule</a>
+        <a class="admin-link" href="index.html">View schedule</a>
+    </header>
+    <aside class="event-bar" aria-label="Schedule updates">
+        <span class="sr-only event-announcement" aria-live="polite"></span>
+        <div class="event-track" aria-hidden="true">
+            <div class="event-group"><span class="event-message">Schedule updates: Schedule changes and news will be posted here.</span></div>
+            <div class="event-group" aria-hidden="true"><span class="event-message">Schedule updates: Schedule changes and news will be posted here.</span></div>
+        </div>
+    </aside>
+    <main id="admin-auth" class="content" hidden>
+        <section id="admin-login" class="auth-card" hidden>
+            <h1>Admin login</h1>
+            <p class="auth-warning">This client-side password gate is only a deterrent. It does not securely protect a public static site.</p>
+            <form id="admin-login-form">
+                <label>
+                    Account
+                    <select name="role" required>
+                        <option value="normal">Normal admin</option>
+                        <option value="super">Super admin</option>
+                    </select>
+                </label>
+                <label>
+                    Password
+                    <input name="password" type="password" autocomplete="current-password" required>
+                </label>
+                <button class="auth-button" type="submit">Log in</button>
+                <p id="login-error" class="auth-error" aria-live="polite"></p>
+            </form>
+        </section>
+    </main>
+    <main id="admin-panel" class="content" hidden>
+        <h1>Edit class schedule</h1>
+        <div class="admin-tools">
+            <p>Edit a class detail directly. Drag its handle to another day and time. Changes save in this browser and appear in open schedule tabs.</p>
+            <div class="admin-account-actions">
+                <span id="admin-role-label" class="admin-role-label"></span>
+                <button id="logout-admin" class="reset-button" type="button">Log out</button>
+                <button id="reset-schedule" class="reset-button" type="button">Restore default schedule</button>
+            </div>
+        </div>
+        <section id="password-manager" class="auth-card password-manager" hidden>
+            <h2>Manage admin passwords</h2>
+            <form id="password-manager-form">
+                <label>
+                    Current super admin password
+                    <input name="currentSuperPassword" type="password" autocomplete="current-password" required>
+                </label>
+                <label>
+                    New normal admin password
+                    <input name="normalPassword" type="password" autocomplete="new-password" required>
+                </label>
+                <label>
+                    New super admin password
+                    <input name="superPassword" type="password" autocomplete="new-password" required>
+                </label>
+                <label>
+                    Confirm new super admin password
+                    <input name="superPasswordConfirm" type="password" autocomplete="new-password" required>
+                </label>
+                <button class="auth-button" type="submit">Update passwords</button>
+                <p id="password-manager-status" class="auth-error" aria-live="polite"></p>
+            </form>
+        </section>
+        <p id="schedule-status" class="schedule-status" aria-live="polite"></p>
+        <div class="table-wrapper">
+            <table class="schedule-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Time</th>
+                        <th scope="col">Monday</th>
+                        <th scope="col">Tuesday</th>
+                        <th scope="col">Wednesday</th>
+                        <th scope="col">Thursday</th>
+                        <th scope="col">Friday</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </main>
+    <script src="admin-auth.js" defer></script>
+    <footer class="site-footer">© 2026 Great Empror. All rights reserved.</footer>
+</body>
+</html>
