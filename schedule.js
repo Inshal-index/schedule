@@ -412,6 +412,9 @@
     }
 
     if (isAdmin) {
+        let touchDrag = null;
+        let suppressClick = false;
+
         tableBody.addEventListener("focusin", (focusEvent) => {
             const field = focusEvent.target.closest("[data-field]");
             if (field) {
@@ -468,6 +471,13 @@
         });
 
         tableBody.addEventListener("click", (clickEvent) => {
+            if (suppressClick) {
+                suppressClick = false;
+                clickEvent.preventDefault();
+                clickEvent.stopPropagation();
+                return;
+            }
+
             const deleteButton = clickEvent.target.closest(".delete-lecture");
             if (deleteButton) {
                 const card = deleteButton.closest(".schedule-event");
@@ -516,6 +526,102 @@
                     day: Number(cell.dataset.day)
                 });
             }
+        });
+
+        tableBody.addEventListener("pointerdown", (pointerEvent) => {
+            if (pointerEvent.pointerType === "mouse" || !pointerEvent.isPrimary) {
+                return;
+            }
+            const handle = pointerEvent.target.closest(".drag-handle");
+            if (!handle) {
+                return;
+            }
+            const card = handle.closest(".schedule-event");
+            const cell = card.closest("td[data-row][data-day]");
+            touchDrag = {
+                pointerId: pointerEvent.pointerId,
+                startX: pointerEvent.clientX,
+                startY: pointerEvent.clientY,
+                source: {
+                    row: Number(cell.dataset.row),
+                    day: Number(cell.dataset.day),
+                    eventIndex: Number(card.dataset.eventIndex)
+                },
+                active: false,
+                target: null
+            };
+            handle.setPointerCapture(pointerEvent.pointerId);
+        });
+
+        tableBody.addEventListener("pointermove", (pointerEvent) => {
+            if (!touchDrag || touchDrag.pointerId !== pointerEvent.pointerId) {
+                return;
+            }
+            if (!touchDrag.active) {
+                const deltaX = pointerEvent.clientX - touchDrag.startX;
+                const deltaY = pointerEvent.clientY - touchDrag.startY;
+                if (Math.hypot(deltaX, deltaY) < 8) {
+                    return;
+                }
+                touchDrag.active = true;
+                touchDrag.sourceCard = tableBody.querySelector(
+                    `td[data-row="${touchDrag.source.row}"][data-day="${touchDrag.source.day}"] .schedule-event[data-event-index="${touchDrag.source.eventIndex}"]`
+                );
+                touchDrag.sourceCard?.classList.add("is-dragging");
+            }
+
+            pointerEvent.preventDefault();
+            const target = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY)
+                ?.closest("td[data-row][data-day]");
+            if (target && tableBody.contains(target)) {
+                if (touchDrag.target !== target) {
+                    touchDrag.target?.classList.remove("drop-target");
+                    target.classList.add("drop-target");
+                    touchDrag.target = target;
+                }
+            } else {
+                touchDrag.target?.classList.remove("drop-target");
+                touchDrag.target = null;
+            }
+        });
+
+        const finishTouchDrag = (pointerEvent, cancelled = false) => {
+            if (!touchDrag || touchDrag.pointerId !== pointerEvent.pointerId) {
+                return;
+            }
+            const drag = touchDrag;
+            touchDrag = null;
+            drag.target?.classList.remove("drop-target");
+            drag.sourceCard?.classList.remove("is-dragging");
+            if (!drag.active) {
+                return;
+            }
+
+            pointerEvent.preventDefault();
+            suppressClick = true;
+            window.setTimeout(() => {
+                suppressClick = false;
+            }, 0);
+            const target = cancelled
+                ? null
+                : document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY)
+                    ?.closest("td[data-row][data-day]");
+            if (target && tableBody.contains(target)) {
+                moveEvent(drag.source, {
+                    row: Number(target.dataset.row),
+                    day: Number(target.dataset.day)
+                });
+            } else {
+                setStatus("Move cancelled.");
+            }
+        };
+
+        tableBody.addEventListener("pointerup", (pointerEvent) => {
+            finishTouchDrag(pointerEvent);
+        });
+
+        tableBody.addEventListener("pointercancel", (pointerEvent) => {
+            finishTouchDrag(pointerEvent, true);
         });
 
         tableBody.addEventListener("dragstart", (dragEvent) => {

@@ -396,6 +396,8 @@ thead th:last-child {
     font: inherit;
     font-size: 0.7rem;
     cursor: grab;
+    touch-action: none;
+    user-select: none;
 }
 
 .drag-handle:active {
@@ -422,6 +424,10 @@ thead th:last-child {
 .schedule-event.is-selected {
     outline: 2px solid #8bbcc7;
     outline-offset: 0.25rem;
+}
+
+.schedule-event.is-dragging {
+    opacity: 0.55;
 }
 
 .admin-slot.drop-target {
