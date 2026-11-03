@@ -88,7 +88,7 @@ body {
     display: flex;
     width: max-content;
     will-change: transform;
-    animation: event-scroll 24s linear infinite;
+    animation: event-scroll var(--ticker-duration, 24s) linear infinite;
 }
 
 .event-group {
@@ -105,8 +105,12 @@ body {
 }
 
 @keyframes event-scroll {
+    from {
+        transform: translate3d(0, 0, 0);
+    }
+
     to {
-        transform: translateX(-50%);
+        transform: translate3d(calc(0px - var(--ticker-distance, 50%)), 0, 0);
     }
 }
 
@@ -223,14 +227,6 @@ body {
     margin: 0;
     color: #7a1717;
     line-height: 1.5;
-}
-
-.password-manager {
-    margin: 1rem 0;
-}
-
-.password-manager h2 {
-    font-size: 1.1rem;
 }
 
 .admin-tools p {

@@ -1,9 +1,6 @@
-(() => {
-    const storageKey = "class-2-schedule-data";
-    const announcementKey = "class-2-schedule-announcement";
-    const introductionAiMigrationKey = "class-2-schedule-introduction-ai-v1";
-    const afternoonScheduleMigrationKey = "class-2-afternoon-schedule-v1";
-    const heDongMigrationKey = "class-2-he-dong-ai-teacher-v1";
+(async () => {
+    const scheduleStorageKey = "class2-schedule";
+    const announcementStorageKey = "class2-schedule-announcement";
     const defaultAnnouncement = "Schedule updates: Schedule changes and news will be posted here.";
     const times = [
         "8:50 AM-10:20 AM",
@@ -65,6 +62,9 @@
     const tableBody = document.querySelector(".schedule-table tbody");
     const status = document.getElementById("schedule-status");
     const isAdmin = document.body.dataset.admin === "true";
+    const isSuperAdmin = document.body.dataset.adminRole === "super";
+    const adminTeacher = document.body.dataset.adminTeacher?.trim().toUpperCase();
+    let editorReady = true;
     if (!tableBody) {
         return;
     }
@@ -87,11 +87,23 @@
                 )
             )
         );
+    const serializeSchedule = (value) => JSON.stringify(value);
+    const parseFirestoreSchedule = (value) => {
+        const parsedSchedule = typeof value === "string" ? JSON.parse(value) : value;
+        if (!isValidSchedule(parsedSchedule)) {
+            throw new Error("The Firebase schedule document has an invalid format.");
+        }
+        return parsedSchedule;
+    };
     const setStatus = (message) => {
         if (status) {
             status.textContent = message;
         }
     };
+    const canEditEvent = (item) =>
+        isAdmin &&
+        editorReady &&
+        (isSuperAdmin || item.teacher.trim().toUpperCase() === adminTeacher);
 
     const renderAnnouncement = (message) => {
         document.querySelectorAll(".event-bar").forEach((bar) => {
@@ -104,82 +116,250 @@
             if (!track || !groups || groups.length < 2) {
                 return;
             }
-            groups.forEach((group) => {
+            const text = message.trim() || defaultAnnouncement;
+            const fillGroup = (group) => {
                 group.replaceChildren();
-                let firstMessage;
                 do {
                     const tickerItem = document.createElement("span");
                     tickerItem.className = "event-message";
-                    tickerItem.textContent = message;
+                    tickerItem.textContent = text;
                     group.append(tickerItem);
-                    firstMessage ??= tickerItem;
-                } while (group.scrollWidth < bar.clientWidth + firstMessage.offsetWidth);
-            });
-            track.style.animationDuration = `${Math.max(12, groups[0].scrollWidth / 70)}s`;
+                } while (group.scrollWidth < bar.clientWidth + group.firstElementChild.offsetWidth);
+            };
+            fillGroup(groups[0]);
+            fillGroup(groups[1]);
+            const groupWidth = groups[0].getBoundingClientRect().width;
+            track.style.setProperty("--ticker-distance", `${groupWidth}px`);
+            track.style.setProperty("--ticker-duration", `${Math.max(12, groupWidth / 70)}s`);
         });
     };
 
-    const publishAnnouncement = (message) => {
-        renderAnnouncement(message);
-        try {
-            localStorage.setItem(announcementKey, JSON.stringify({
-                message,
-                updatedAt: Date.now()
-            }));
-        } catch (error) {
-            setStatus(`Schedule saved, but the alert could not be updated: ${error.message}`);
-        }
-    };
+    let schedule = cloneDefault();
+    let announcement = defaultAnnouncement;
+    let storageError = "";
+    let firebaseReady = false;
+    let hasLocalScheduleChanges = false;
+    let hasLocalAnnouncementChanges = false;
+    render();
+    renderAnnouncement(announcement);
+    window.addEventListener("resize", () => renderAnnouncement(announcement));
+    setStatus("Opening the editor and connecting to Firebase...");
 
+    let firebase;
     try {
-        const savedAnnouncement = localStorage.getItem(announcementKey);
-        if (savedAnnouncement !== null) {
-            const parsedAnnouncement = JSON.parse(savedAnnouncement);
-            if (typeof parsedAnnouncement.message !== "string") {
-                throw new Error("Saved announcement has an invalid format.");
-            }
-            renderAnnouncement(parsedAnnouncement.message);
-        } else {
-            renderAnnouncement(defaultAnnouncement);
-        }
+        firebase = await import("./firebase.js");
     } catch (error) {
-        renderAnnouncement(defaultAnnouncement);
-        setStatus(`Could not load the saved alert: ${error.message}`);
+        storageError = `Could not load Firebase: ${error.message}. Check your internet connection.`;
     }
+    const scheduleRef = firebase?.doc(firebase.db, "schedules", "current");
+    const announcementRef = firebase?.doc(firebase.db, "announcements", "current");
+    setStatus("Connecting to the shared schedule...");
+    let startupTimeout;
+    try {
+        if (!firebase || !scheduleRef || !announcementRef) {
+            throw new Error(storageError || "Firebase is not available.");
+        }
+        const [scheduleSnapshot, announcementSnapshot] = await Promise.race([
+            Promise.all([
+                firebase.getDoc(scheduleRef),
+                firebase.getDoc(announcementRef)
+            ]),
+            new Promise((_, reject) => {
+                startupTimeout = window.setTimeout(
+                    () => reject(new Error("Firebase connection timed out")),
+                    10000
+                );
+            })
+        ]);
+        if (scheduleSnapshot.exists()) {
+            const savedSchedule = parseFirestoreSchedule(scheduleSnapshot.data().schedule);
+            if (hasLocalScheduleChanges) {
+                await firebase.setDoc(scheduleRef, { schedule: serializeSchedule(schedule) });
+                hasLocalScheduleChanges = false;
+            } else {
+                schedule = savedSchedule;
+            }
+        } else {
+            const savedSchedule = localStorage.getItem(scheduleStorageKey);
+            if (savedSchedule !== null && !hasLocalScheduleChanges) {
+                const parsedSchedule = JSON.parse(savedSchedule);
+                if (!isValidSchedule(parsedSchedule)) {
+                    throw new Error("The locally saved schedule has an invalid format.");
+                }
+                schedule = parsedSchedule;
+            }
+            if (isAdmin) {
+                await firebase.setDoc(scheduleRef, { schedule: serializeSchedule(schedule) });
+                hasLocalScheduleChanges = false;
+            }
+        }
+        if (announcementSnapshot.exists()) {
+            const savedAnnouncement = announcementSnapshot.data().message;
+            if (typeof savedAnnouncement !== "string") {
+                throw new Error("The Firebase announcement document has an invalid format.");
+            }
+            if (hasLocalAnnouncementChanges) {
+                await firebase.setDoc(announcementRef, { message: announcement });
+                hasLocalAnnouncementChanges = false;
+            } else {
+                announcement = savedAnnouncement;
+            }
+        } else if (isAdmin) {
+            const savedAnnouncement = localStorage.getItem(announcementStorageKey);
+            if (savedAnnouncement !== null && !hasLocalAnnouncementChanges) {
+                announcement = savedAnnouncement;
+            }
+            await firebase.setDoc(announcementRef, { message: announcement });
+            hasLocalAnnouncementChanges = false;
+        } else {
+            if (!hasLocalAnnouncementChanges) {
+                announcement = localStorage.getItem(announcementStorageKey) ?? defaultAnnouncement;
+            }
+        }
+        firebaseReady = true;
+        editorReady = true;
+    } catch (error) {
+        storageError = `Could not connect to Firebase: ${error.message}. Check that Firestore is enabled and its rules are published.`;
+        editorReady = true;
+    } finally {
+        window.clearTimeout(startupTimeout);
+    }
+    let selectedSource = null;
+    let saveTimer;
 
-    window.addEventListener("resize", () => {
-        try {
-            const savedAnnouncement = localStorage.getItem(announcementKey);
-            const parsedAnnouncement = savedAnnouncement === null ? null : JSON.parse(savedAnnouncement);
-            renderAnnouncement(typeof parsedAnnouncement?.message === "string" ? parsedAnnouncement.message : defaultAnnouncement);
-        } catch (error) {
-            setStatus(`Could not refresh the alert: ${error.message}`);
+    render();
+    window.addEventListener("storage", (storageEvent) => {
+        if (storageEvent.key === scheduleStorageKey && storageEvent.newValue) {
+            try {
+                const updatedSchedule = JSON.parse(storageEvent.newValue);
+                if (!isValidSchedule(updatedSchedule)) {
+                    throw new Error("The saved schedule has an invalid format.");
+                }
+                schedule = updatedSchedule;
+                render();
+                setStatus("Schedule updated from another tab.");
+            } catch (error) {
+                setStatus(`Could not load the schedule from another tab: ${error.message}`);
+            }
+        }
+        if (storageEvent.key === announcementStorageKey && storageEvent.newValue !== null) {
+            announcement = storageEvent.newValue;
+            renderAnnouncement(announcement);
         }
     });
 
-    let schedule = cloneDefault();
-    let selectedSource = null;
-    let scheduleSaved = true;
-
-    try {
-        const savedSchedule = localStorage.getItem(storageKey);
-        if (savedSchedule !== null) {
-            const parsedSchedule = JSON.parse(savedSchedule);
-            if (!isValidSchedule(parsedSchedule)) {
-                throw new Error("Saved schedule has an invalid format.");
-            }
-            schedule = parsedSchedule;
+    firebase?.onSnapshot(scheduleRef, (snapshot) => {
+        const wasReady = firebaseReady;
+        firebaseReady = true;
+        editorReady = true;
+        if (!wasReady) {
+            setStatus("Connected to Firebase. Schedule changes sync across devices.");
+            render();
         }
-    } catch (error) {
-        setStatus(`Could not load the saved schedule: ${error.message}`);
+        if (!snapshot.exists()) {
+            if (isAdmin) {
+                firebase.setDoc(scheduleRef, { schedule: serializeSchedule(schedule) }).catch((error) => {
+                    setStatus(`Could not initialize the shared schedule: ${error.message}`);
+                });
+            }
+            if (!isAdmin) {
+                setStatus("Shared schedule is not set up yet. Ask an admin to sign in.");
+            }
+            return;
+        }
+        if (saveTimer) {
+            return;
+        }
+        let updatedSchedule;
+        try {
+            updatedSchedule = parseFirestoreSchedule(snapshot.data().schedule);
+        } catch (error) {
+            setStatus(`Could not load schedule update: ${error.message}`);
+            return;
+        }
+        if (JSON.stringify(updatedSchedule) !== JSON.stringify(schedule)) {
+            schedule = updatedSchedule;
+            render();
+            try {
+                localStorage.setItem(scheduleStorageKey, JSON.stringify(schedule));
+            } catch (error) {
+                setStatus(`Schedule updated, but this browser could not cache it: ${error.message}`);
+                return;
+            }
+            setStatus(isAdmin ? "Schedule updated from another device." : "Schedule updated.");
+        }
+    }, (error) => {
+        editorReady = true;
+        render();
+        setStatus(`Could not listen for schedule updates: ${error.message}`);
+    });
+
+    firebase?.onSnapshot(announcementRef, (snapshot) => {
+        const wasReady = firebaseReady;
+        firebaseReady = true;
+        editorReady = true;
+        if (!wasReady) {
+            setStatus("Connected to Firebase. Schedule changes sync across devices.");
+            render();
+        }
+        if (!snapshot.exists()) {
+            if (isAdmin) {
+                firebase.setDoc(announcementRef, { message: announcement }).catch((error) => {
+                    setStatus(`Could not initialize the notification: ${error.message}`);
+                });
+            }
+            return;
+        }
+        const updatedAnnouncement = snapshot.data().message;
+        if (typeof updatedAnnouncement !== "string") {
+            setStatus("Could not load notification update: the Firebase announcement has an invalid format.");
+            return;
+        }
+        if (updatedAnnouncement !== announcement) {
+            announcement = updatedAnnouncement;
+            renderAnnouncement(announcement);
+            try {
+                localStorage.setItem(announcementStorageKey, announcement);
+            } catch (error) {
+                setStatus(`Notification updated, but this browser could not cache it: ${error.message}`);
+            }
+        }
+    }, (error) => {
+        editorReady = true;
+        render();
+        setStatus(`Could not listen for notification updates: ${error.message}`);
+    });
+
+    if (storageError) {
+        setStatus(storageError);
     }
 
-    const renderField = (item, field, label, parent, admin) => {
+    const publishAnnouncement = (message) => {
+        announcement = message;
+        renderAnnouncement(message);
+        try {
+            localStorage.setItem(announcementStorageKey, message);
+            hasLocalAnnouncementChanges = true;
+        } catch (error) {
+            setStatus(`The notification is shown here, but could not be cached: ${error.message}`);
+        }
+        if (!firebaseReady) {
+            setStatus("The notification is shown here but Firebase is not connected.");
+            return;
+        }
+        firebase?.setDoc(announcementRef, { message }).then(() => {
+            hasLocalAnnouncementChanges = false;
+        }).catch((error) => {
+            setStatus(`Schedule saved, but the notification could not be shared: ${error.message}`);
+        });
+    };
+
+    function renderField(item, field, label, parent, editable) {
         const element = document.createElement(field === "course" ? "strong" : "span");
         element.className = `schedule-${field}`;
         element.dataset.field = field;
         element.textContent = item[field];
-        if (admin) {
+        if (editable) {
             element.contentEditable = "true";
             element.setAttribute("role", "textbox");
             element.setAttribute("aria-label", label);
@@ -195,9 +375,9 @@
         }
         parent.append(element);
         return element;
-    };
+    }
 
-    const render = () => {
+    function render() {
         tableBody.replaceChildren();
         schedule.forEach((row, rowIndex) => {
             const tableRow = document.createElement("tr");
@@ -226,7 +406,7 @@
                     card.className = "schedule-event";
                     card.dataset.eventIndex = String(eventIndex);
 
-                    if (isAdmin) {
+                    if (canEditEvent(item)) {
                         const actions = document.createElement("div");
                         actions.className = "schedule-actions";
 
@@ -247,13 +427,14 @@
                         card.append(actions);
                     }
 
-                    renderField(item, "course", "Class name", card, isAdmin);
-                    renderField(item, "teacher", "Teacher name", card, isAdmin);
-                    renderField(item, "weeks", "Class weeks", card, isAdmin);
+                    const canEdit = canEditEvent(item);
+                    renderField(item, "course", "Class name", card, canEdit);
+                    renderField(item, "teacher", "Teacher name", card, canEdit && isSuperAdmin);
+                    renderField(item, "weeks", "Class weeks", card, canEdit);
                     if (item.location) {
-                        renderField(item, "location", "Room or location", card, isAdmin);
+                        renderField(item, "location", "Room or location", card, canEdit);
                     } else if (isAdmin) {
-                        renderField(item, "location", "Room or location", card, isAdmin);
+                        renderField(item, "location", "Room or location", card, canEdit);
                     } else {
                         const location = document.createElement("span");
                         location.className = "schedule-location";
@@ -267,97 +448,49 @@
             });
             tableBody.append(tableRow);
         });
+    }
+
+    const save = (debounce = false) => {
+        setStatus(firebaseReady
+            ? "Saving changes to the shared schedule..."
+            : "Saving changes in this browser; Firebase is not connected...");
+        window.clearTimeout(saveTimer);
+        const persist = () => {
+            saveTimer = undefined;
+            if (!firebaseReady) {
+                try {
+                    localStorage.setItem(scheduleStorageKey, JSON.stringify(schedule));
+                    hasLocalScheduleChanges = true;
+                } catch (error) {
+                    setStatus(`Could not save changes in this browser: ${error.message}`);
+                    return;
+                }
+                setStatus("Changes saved in this browser only. Connect to Firebase to sync across devices.");
+                return;
+            }
+            const savedSchedule = JSON.stringify(schedule);
+            firebase.setDoc(scheduleRef, { schedule: serializeSchedule(schedule) }).then(() => {
+                if (JSON.stringify(schedule) === savedSchedule) {
+                    hasLocalScheduleChanges = false;
+                }
+                try {
+                    localStorage.setItem(scheduleStorageKey, JSON.stringify(schedule));
+                } catch (error) {
+                    setStatus(`Schedule saved to Firebase, but could not be cached in this browser: ${error.message}`);
+                    return;
+                }
+                setStatus("Changes saved. The schedule updates on other devices.");
+            }).catch((error) => {
+                setStatus(`Could not save changes to Firebase: ${error.message}`);
+            });
+        };
+        if (debounce) {
+            saveTimer = window.setTimeout(persist, 350);
+        } else {
+            persist();
+        }
+        return true;
     };
-
-    const save = () => {
-        try {
-            localStorage.setItem(storageKey, JSON.stringify(schedule));
-            scheduleSaved = true;
-            setStatus("Changes saved automatically. The schedule page updates in open tabs.");
-            return true;
-        } catch (error) {
-            scheduleSaved = false;
-            setStatus(`Could not save changes in this browser: ${error.message}`);
-            return false;
-        }
-    };
-
-    try {
-        if (localStorage.getItem(introductionAiMigrationKey) === null) {
-            const tuesdayTwoPm = schedule[2][1];
-            const alreadyAdded = tuesdayTwoPm.some(
-                (item) => item.course.trim().toLowerCase() === "introduction to ai"
-            );
-            if (alreadyAdded) {
-                localStorage.setItem(introductionAiMigrationKey, "complete");
-            } else {
-                tuesdayTwoPm.unshift(event("Introduction to AI", "HE DONG", "Week 8-15", "Room 1505"));
-                if (save()) {
-                    localStorage.setItem(introductionAiMigrationKey, "complete");
-                    publishAnnouncement("HE DONG: Introduction to AI added to Tuesday at 2:00 PM-3:30 PM.");
-                }
-            }
-        }
-    } catch (error) {
-        setStatus(`Could not add Introduction to AI to Tuesday at 2:00 PM: ${error.message}`);
-    }
-
-    try {
-        if (localStorage.getItem(afternoonScheduleMigrationKey) === null) {
-            const moveLecture = (sourceSlot, targetSlot, courseName) => {
-                const sourceIndex = sourceSlot.findIndex(
-                    (item) => item.course.trim().toLowerCase() === courseName &&
-                        item.teacher.trim().toUpperCase() === "ZHANG YAN"
-                );
-                if (sourceIndex === -1) {
-                    return false;
-                }
-                const [lecture] = sourceSlot.splice(sourceIndex, 1);
-                const alreadyInTarget = targetSlot.some(
-                    (item) => item.course.trim().toLowerCase() === courseName &&
-                        item.teacher.trim().toUpperCase() === "ZHANG YAN"
-                );
-                if (!alreadyInTarget) {
-                    targetSlot.push(lecture);
-                }
-                return true;
-            };
-            const movedBasicChinese = moveLecture(schedule[2][1], schedule[2][2], "basic chinese");
-            const movedAestheticEducation = moveLecture(schedule[2][2], schedule[2][3], "aesthetic education");
-            if (!movedBasicChinese && !movedAestheticEducation) {
-                localStorage.setItem(afternoonScheduleMigrationKey, "complete");
-            } else if (save()) {
-                localStorage.setItem(afternoonScheduleMigrationKey, "complete");
-                publishAnnouncement("ZHANG YAN: Basic Chinese moved to Wednesday at 2:00 PM and Aesthetic Education moved to Thursday at 2:00 PM.");
-            }
-        }
-    } catch (error) {
-        setStatus(`Could not update the Tuesday, Wednesday, and Thursday 2:00 PM schedule: ${error.message}`);
-    }
-
-    try {
-        if (localStorage.getItem(heDongMigrationKey) === null) {
-            let updated = false;
-            schedule.forEach((row) => row.forEach((slot) => {
-                slot.forEach((item) => {
-                    if (item.course.trim().toLowerCase() === "introduction to ai") {
-                        item.teacher = "HE DONG";
-                        item.weeks = "Week 8-15";
-                        item.location = "Room 1505";
-                        updated = true;
-                    }
-                });
-            }));
-            if (!updated || save()) {
-                localStorage.setItem(heDongMigrationKey, "complete");
-                if (updated) {
-                    publishAnnouncement("HE DONG: Introduction to AI updated to Week 8-15 in Room 1505.");
-                }
-            }
-        }
-    } catch (error) {
-        setStatus(`Could not update the Introduction to AI teacher and class details: ${error.message}`);
-    }
 
     const moveEvent = (source, target) => {
         if (
@@ -383,6 +516,11 @@
         }
         const sourceSlot = schedule[source.row][source.day];
         const targetSlot = schedule[target.row][target.day];
+        if (!canEditEvent(sourceSlot[source.eventIndex])) {
+            clearSelection();
+            setStatus("You can only move classes assigned to your account.");
+            return;
+        }
         if (source.row === target.row && source.day === target.day) {
             selectedSource = null;
             render();
@@ -406,18 +544,19 @@
         });
     };
 
-    render();
-    if (isAdmin && !status?.textContent) {
-        setStatus("Changes save automatically. Drag a class or select Move, then choose a destination.");
-    }
-
     if (isAdmin) {
         let touchDrag = null;
         let suppressClick = false;
 
         tableBody.addEventListener("focusin", (focusEvent) => {
             const field = focusEvent.target.closest("[data-field]");
-            if (field) {
+            const card = field?.closest(".schedule-event");
+            const cell = card?.closest("td[data-row][data-day]");
+            const item = cell && card
+                ? schedule[Number(cell.dataset.row)][Number(cell.dataset.day)][Number(card.dataset.eventIndex)]
+                : null;
+            if (field && item && canEditEvent(item) &&
+                (field.dataset.field !== "teacher" || isSuperAdmin)) {
                 field.dataset.originalValue = field.textContent.trim();
             }
         });
@@ -430,6 +569,9 @@
                 return;
             }
             const item = schedule[Number(cell.dataset.row)][Number(cell.dataset.day)][Number(card.dataset.eventIndex)];
+            if (!canEditEvent(item) || (field.dataset.field === "teacher" && !isSuperAdmin)) {
+                return;
+            }
             item[field.dataset.field] = field.textContent.replace(/\s+/g, " ").trim();
             if (field.dataset.field === "teacher") {
                 field.classList.remove("teacher-name--boy", "teacher-name--girl");
@@ -440,7 +582,7 @@
                     field.classList.add("teacher-name--girl");
                 }
             }
-            save();
+            save(true);
         });
 
         tableBody.addEventListener("focusout", (focusEvent) => {
@@ -450,20 +592,23 @@
             if (!field || !card || !cell) {
                 return;
             }
+            const item = schedule[Number(cell.dataset.row)][Number(cell.dataset.day)][Number(card.dataset.eventIndex)];
+            if (!canEditEvent(item) || (field.dataset.field === "teacher" && !isSuperAdmin)) {
+                return;
+            }
             const currentValue = field.textContent.replace(/\s+/g, " ").trim();
             const originalValue = field.dataset.originalValue ?? currentValue;
             delete field.dataset.originalValue;
             if (currentValue === originalValue) {
                 return;
             }
-            const item = schedule[Number(cell.dataset.row)][Number(cell.dataset.day)][Number(card.dataset.eventIndex)];
             const fieldLabels = {
                 course: "lecture name",
                 teacher: "teacher name",
                 weeks: "weeks",
                 location: "room or location"
             };
-            if (scheduleSaved) {
+            if (save()) {
                 publishAnnouncement(
                     `${item.teacher || "A teacher"}: ${item.course || "A lecture"} updated (${fieldLabels[field.dataset.field] || "class details"}) for ${days[Number(cell.dataset.day)]} at ${times[Number(cell.dataset.row)]}.`
                 );
@@ -486,6 +631,10 @@
                 const day = Number(cell.dataset.day);
                 const eventIndex = Number(card.dataset.eventIndex);
                 const lecture = schedule[row][day][eventIndex];
+                if (!canEditEvent(lecture)) {
+                    setStatus("You can only delete classes assigned to your account.");
+                    return;
+                }
                 if (!window.confirm(`Delete "${lecture.course}" from ${days[day]} at ${times[row]}?`)) {
                     return;
                 }
@@ -693,6 +842,9 @@
             }
         });
 
+    }
+
+    if (isSuperAdmin) {
         document.getElementById("reset-schedule")?.addEventListener("click", () => {
             if (!window.confirm("Restore the original schedule? This will replace your saved changes.")) {
                 return;
@@ -705,38 +857,4 @@
         });
     }
 
-    window.addEventListener("storage", (storageEvent) => {
-        if (storageEvent.key === announcementKey) {
-            try {
-                const updatedAnnouncement = storageEvent.newValue === null
-                    ? null
-                    : JSON.parse(storageEvent.newValue);
-                if (updatedAnnouncement !== null && typeof updatedAnnouncement.message !== "string") {
-                    throw new Error("Saved announcement has an invalid format.");
-                }
-                renderAnnouncement(updatedAnnouncement?.message || defaultAnnouncement);
-            } catch (error) {
-                setStatus(`Could not load the alert update: ${error.message}`);
-            }
-            return;
-        }
-        if (storageEvent.key !== storageKey) {
-            return;
-        }
-        try {
-            if (storageEvent.newValue === null) {
-                schedule = cloneDefault();
-            } else {
-                const updatedSchedule = JSON.parse(storageEvent.newValue);
-                if (!isValidSchedule(updatedSchedule)) {
-                    throw new Error("Saved schedule has an invalid format.");
-                }
-                schedule = updatedSchedule;
-            }
-            render();
-            setStatus(isAdmin ? "Schedule updated from another open admin page." : "Schedule updated from the admin page.");
-        } catch (error) {
-            setStatus(`Could not load the schedule update: ${error.message}`);
-        }
-    });
 })();

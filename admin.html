@@ -6,7 +6,7 @@
     <link rel="stylesheet" href="style.css">
     <title>Edit class schedule</title>
 </head>
-<body data-admin="true">
+<body data-admin="false">
     <header class="site-header">
         <a class="site-title" href="index.html">Class-2 Schedule</a>
         <a class="admin-link" href="index.html">View schedule</a>
@@ -18,23 +18,22 @@
             <div class="event-group" aria-hidden="true"><span class="event-message">Schedule updates: Schedule changes and news will be posted here.</span></div>
         </div>
     </aside>
-    <main id="admin-auth" class="content" hidden>
-        <section id="admin-login" class="auth-card" hidden>
+    <main id="admin-auth" class="content">
+        <section id="admin-login" class="auth-card">
             <h1>Admin login</h1>
-            <p class="auth-warning">This client-side password gate is only a deterrent. It does not securely protect a public static site.</p>
+            <p class="auth-warning">Sign in with the email address and password created in Firebase Authentication.</p>
             <form id="admin-login-form">
                 <label>
-                    Account
-                    <select name="role" required>
-                        <option value="normal">Normal admin</option>
-                        <option value="super">Super admin</option>
-                    </select>
+                    Email
+                    <input name="email" type="email" autocomplete="username"
+                        autocapitalize="none" spellcheck="false" placeholder="Enter your email" required>
                 </label>
                 <label>
                     Password
-                    <input name="password" type="password" autocomplete="current-password" required>
+                    <input name="password" type="password" autocomplete="current-password"
+                        placeholder="Enter your password" required>
                 </label>
-                <button class="auth-button" type="submit">Log in</button>
+                <button class="auth-button" type="submit" disabled>Log in</button>
                 <p id="login-error" class="auth-error" aria-live="polite"></p>
             </form>
         </section>
@@ -42,37 +41,14 @@
     <main id="admin-panel" class="content" hidden>
         <h1>Edit class schedule</h1>
         <div class="admin-tools">
-            <p>Edit a class detail directly. Drag its handle to another day and time. Changes save in this browser and appear in open schedule tabs.</p>
+            <p>Edit your class details or move them to another day and time. Changes sync through Firebase to other devices.</p>
             <div class="admin-account-actions">
                 <span id="admin-role-label" class="admin-role-label"></span>
                 <button id="logout-admin" class="reset-button" type="button">Log out</button>
                 <button id="reset-schedule" class="reset-button" type="button">Restore default schedule</button>
             </div>
         </div>
-        <section id="password-manager" class="auth-card password-manager" hidden>
-            <h2>Manage admin passwords</h2>
-            <form id="password-manager-form">
-                <label>
-                    Current super admin password
-                    <input name="currentSuperPassword" type="password" autocomplete="current-password" required>
-                </label>
-                <label>
-                    New normal admin password
-                    <input name="normalPassword" type="password" autocomplete="new-password" required>
-                </label>
-                <label>
-                    New super admin password
-                    <input name="superPassword" type="password" autocomplete="new-password" required>
-                </label>
-                <label>
-                    Confirm new super admin password
-                    <input name="superPasswordConfirm" type="password" autocomplete="new-password" required>
-                </label>
-                <button class="auth-button" type="submit">Update passwords</button>
-                <p id="password-manager-status" class="auth-error" aria-live="polite"></p>
-            </form>
-        </section>
-        <p id="schedule-status" class="schedule-status" aria-live="polite"></p>
+        <p id="schedule-status" class="schedule-status" aria-live="polite">Connecting to the shared schedule...</p>
         <div class="table-wrapper">
             <table class="schedule-table">
                 <thead>
@@ -89,7 +65,7 @@
             </table>
         </div>
     </main>
-    <script src="admin-auth.js" defer></script>
+    <script defer src="admin-auth.js"></script>
     <footer class="site-footer">© 2026 Great Empror. All rights reserved.</footer>
 </body>
 </html>
