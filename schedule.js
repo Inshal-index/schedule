@@ -1,5 +1,7 @@
 (async () => {
     const scheduleStorageKey = "class2-schedule";
+    const weekNumberStorageKey = "class2-schedule-week-number";
+    const weekNumberPendingKey = "class2-schedule-week-number-pending";
     const announcementStorageKey = "class2-schedule-announcement";
     const defaultAnnouncement = "Schedule updates: Schedule changes and news will be posted here.";
     const times = [
@@ -61,10 +63,12 @@
 
     const tableBody = document.querySelector(".schedule-table tbody");
     const status = document.getElementById("schedule-status");
+    const chinaTimeDisplay = document.getElementById("china-time");
+    const weekNumberInput = document.getElementById("week-number-editor");
     const isAdmin = document.body.dataset.admin === "true";
     const isSuperAdmin = document.body.dataset.adminRole === "super";
     const adminTeacher = document.body.dataset.adminTeacher?.trim().toUpperCase();
-    let editorReady = true;
+    let editorReady = false;
     if (!tableBody) {
         return;
     }
@@ -88,6 +92,122 @@
             )
         );
     const serializeSchedule = (value) => JSON.stringify(value);
+    const isValidWeekNumber = (value) =>
+        Number.isInteger(value) && value >= 1 && value <= 53;
+    let networkChinaTime = null;
+    let chinaTimeSyncFailed = false;
+    const getMinutes = (timeText) => {
+        const match = timeText.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+        if (!match) {
+            return null;
+        }
+        let hour = Number(match[1]) % 12;
+        if (match[3].toUpperCase() === "PM") {
+            hour += 12;
+        }
+        return hour * 60 + Number(match[2]);
+    };
+    const updateChinaClockAndHighlight = () => {
+        if (!chinaTimeDisplay || !networkChinaTime) {
+            return;
+        }
+        const currentTime = new Date(
+            networkChinaTime.wallClockEpoch + performance.now() - networkChinaTime.syncedAt
+        );
+        const dayIndex = (currentTime.getUTCDay() + 6) % 7;
+        const formatter = new Intl.DateTimeFormat(undefined, {
+            timeZone: "UTC",
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            second: "2-digit"
+        });
+        chinaTimeDisplay.textContent =
+            `China Standard Time (UTC+8): ${formatter.format(currentTime)}` +
+            (chinaTimeSyncFailed ? " (last network sync; refresh failed)" : "");
+
+        const currentMinutes = currentTime.getUTCHours() * 60 + currentTime.getUTCMinutes();
+        tableBody.querySelectorAll("td[data-row][data-day]").forEach((cell) => {
+            const rowIndex = Number(cell.dataset.row);
+            const cellDay = Number(cell.dataset.day);
+            const range = times[rowIndex].split("-");
+            const start = getMinutes(range[0]);
+            const end = getMinutes(range[1]);
+            const isCurrent = cellDay === dayIndex &&
+                start !== null &&
+                end !== null &&
+                currentMinutes >= start &&
+                currentMinutes < end &&
+                schedule[rowIndex][cellDay].length > 0;
+            cell.classList.toggle("is-current-lecture", isCurrent);
+            cell.querySelectorAll(".schedule-event").forEach((lecture) => {
+                lecture.classList.toggle("is-current-lecture", isCurrent);
+            });
+        });
+    };
+    const syncChinaTime = async () => {
+        let timeout;
+        try {
+            const controller = new AbortController();
+            timeout = window.setTimeout(() => controller.abort(), 10000);
+            const response = await fetch(
+                "https://timeapi.io/api/Time/current/zone?timeZone=Asia/Shanghai",
+                { cache: "no-store", signal: controller.signal }
+            );
+            if (!response.ok) {
+                throw new Error(`Time service responded with HTTP ${response.status}.`);
+            }
+            const result = await response.json();
+            const components = [
+                result.year, result.month, result.day, result.hour,
+                result.minute, result.seconds, result.milliSeconds
+            ];
+            if (!components.every(Number.isInteger) ||
+                result.timeZone !== "Asia/Shanghai" ||
+                result.month < 1 || result.month > 12 ||
+                result.day < 1 || result.day > 31 ||
+                result.hour < 0 || result.hour > 23 ||
+                result.minute < 0 || result.minute > 59 ||
+                result.seconds < 0 || result.seconds > 59 ||
+                result.milliSeconds < 0 || result.milliSeconds > 999) {
+                throw new Error("Time service returned an invalid China time.");
+            }
+            networkChinaTime = {
+                wallClockEpoch: Date.UTC(
+                    result.year,
+                    result.month - 1,
+                    result.day,
+                    result.hour,
+                    result.minute,
+                    result.seconds,
+                    result.milliSeconds
+                ),
+                syncedAt: performance.now()
+            };
+            chinaTimeSyncFailed = false;
+            updateChinaClockAndHighlight();
+        } catch (error) {
+            chinaTimeSyncFailed = true;
+            if (networkChinaTime) {
+                updateChinaClockAndHighlight();
+            } else if (chinaTimeDisplay) {
+                chinaTimeDisplay.textContent =
+                    `China time is unavailable; ongoing lectures cannot be determined. ${error.message}`;
+            }
+        } finally {
+            window.clearTimeout(timeout);
+        }
+    };
+    const updateWeekNumberDisplay = () => {
+        document.querySelectorAll("[data-week-number]").forEach((element) => {
+            element.textContent = String(weekNumber);
+        });
+        if (weekNumberInput && document.activeElement !== weekNumberInput) {
+            weekNumberInput.value = String(weekNumber);
+        }
+    };
     const parseFirestoreSchedule = (value) => {
         const parsedSchedule = typeof value === "string" ? JSON.parse(value) : value;
         if (!isValidSchedule(parsedSchedule)) {
@@ -104,6 +224,28 @@
         isAdmin &&
         editorReady &&
         (isSuperAdmin || item.teacher.trim().toUpperCase() === adminTeacher);
+    const getLectureTemplates = () => {
+        const templates = [];
+        const seen = new Set();
+        [schedule, defaultSchedule].forEach((sourceSchedule) => {
+            sourceSchedule.forEach((row) => {
+                row.forEach((slot) => {
+                    slot.forEach((item) => {
+                        if (!isSuperAdmin &&
+                            item.teacher.trim().toUpperCase() !== adminTeacher) {
+                            return;
+                        }
+                        const key = JSON.stringify([item.course, item.teacher]);
+                        if (!seen.has(key)) {
+                            seen.add(key);
+                            templates.push(item);
+                        }
+                    });
+                });
+            });
+        });
+        return templates;
+    };
 
     const renderAnnouncement = (message) => {
         document.querySelectorAll(".event-bar").forEach((bar) => {
@@ -136,12 +278,31 @@
 
     let schedule = cloneDefault();
     let announcement = defaultAnnouncement;
+    let addingSlot = null;
+    let nativeDragSource = null;
+    let weekNumber = 9;
     let storageError = "";
     let firebaseReady = false;
     let hasLocalScheduleChanges = false;
+    let hasLocalWeekChanges = false;
     let hasLocalAnnouncementChanges = false;
+    try {
+        const savedWeekNumber = Number(localStorage.getItem(weekNumberStorageKey));
+        if (isValidWeekNumber(savedWeekNumber)) {
+            weekNumber = savedWeekNumber;
+        }
+        hasLocalWeekChanges = isValidWeekNumber(savedWeekNumber) &&
+            localStorage.getItem(weekNumberPendingKey) === "true";
+    } catch (error) {
+        storageError = `Could not read the saved week number: ${error.message}`;
+    }
+    updateWeekNumberDisplay();
     render();
     renderAnnouncement(announcement);
+    updateChinaClockAndHighlight();
+    void syncChinaTime();
+    window.setInterval(updateChinaClockAndHighlight, 1000);
+    window.setInterval(syncChinaTime, 5 * 60 * 1000);
     window.addEventListener("resize", () => renderAnnouncement(announcement));
     setStatus("Opening the editor and connecting to Firebase...");
 
@@ -172,12 +333,29 @@
             })
         ]);
         if (scheduleSnapshot.exists()) {
-            const savedSchedule = parseFirestoreSchedule(scheduleSnapshot.data().schedule);
-            if (hasLocalScheduleChanges) {
-                await firebase.setDoc(scheduleRef, { schedule: serializeSchedule(schedule) });
+            const savedData = scheduleSnapshot.data();
+            const savedSchedule = parseFirestoreSchedule(savedData.schedule);
+            const savedWeekNumber = savedData.weekNumber === undefined ? 9 : savedData.weekNumber;
+            if (!isValidWeekNumber(savedWeekNumber)) {
+                throw new Error("The Firebase schedule document has an invalid week number.");
+            }
+            if (hasLocalScheduleChanges || hasLocalWeekChanges) {
+                if (!hasLocalScheduleChanges) {
+                    schedule = savedSchedule;
+                }
+                if (!hasLocalWeekChanges) {
+                    weekNumber = savedWeekNumber;
+                }
+                await firebase.setDoc(scheduleRef, {
+                    schedule: serializeSchedule(schedule),
+                    weekNumber
+                });
                 hasLocalScheduleChanges = false;
+                hasLocalWeekChanges = false;
+                localStorage.removeItem(weekNumberPendingKey);
             } else {
                 schedule = savedSchedule;
+                weekNumber = savedWeekNumber;
             }
         } else {
             const savedSchedule = localStorage.getItem(scheduleStorageKey);
@@ -188,9 +366,17 @@
                 }
                 schedule = parsedSchedule;
             }
+            if (isAdmin && hasLocalWeekChanges) {
+                weekNumber = Number(localStorage.getItem(weekNumberStorageKey));
+            }
             if (isAdmin) {
-                await firebase.setDoc(scheduleRef, { schedule: serializeSchedule(schedule) });
+                await firebase.setDoc(scheduleRef, {
+                    schedule: serializeSchedule(schedule),
+                    weekNumber
+                });
                 hasLocalScheduleChanges = false;
+                hasLocalWeekChanges = false;
+                localStorage.removeItem(weekNumberPendingKey);
             }
         }
         if (announcementSnapshot.exists()) {
@@ -223,6 +409,10 @@
         editorReady = true;
     } finally {
         window.clearTimeout(startupTimeout);
+    }
+    updateWeekNumberDisplay();
+    if (weekNumberInput) {
+        weekNumberInput.disabled = !isAdmin || !editorReady;
     }
     let selectedSource = null;
     let saveTimer;
@@ -258,7 +448,10 @@
         }
         if (!snapshot.exists()) {
             if (isAdmin) {
-                firebase.setDoc(scheduleRef, { schedule: serializeSchedule(schedule) }).catch((error) => {
+                firebase.setDoc(scheduleRef, {
+                    schedule: serializeSchedule(schedule),
+                    weekNumber
+                }).catch((error) => {
                     setStatus(`Could not initialize the shared schedule: ${error.message}`);
                 });
             }
@@ -267,21 +460,33 @@
             }
             return;
         }
-        if (saveTimer) {
+        if (saveTimer || hasLocalScheduleChanges || hasLocalWeekChanges) {
             return;
         }
         let updatedSchedule;
+        let updatedWeekNumber;
         try {
             updatedSchedule = parseFirestoreSchedule(snapshot.data().schedule);
+            updatedWeekNumber = snapshot.data().weekNumber === undefined
+                ? 9
+                : snapshot.data().weekNumber;
+            if (!isValidWeekNumber(updatedWeekNumber)) {
+                throw new Error("The schedule document has an invalid week number.");
+            }
         } catch (error) {
             setStatus(`Could not load schedule update: ${error.message}`);
             return;
         }
-        if (JSON.stringify(updatedSchedule) !== JSON.stringify(schedule)) {
+        if (JSON.stringify(updatedSchedule) !== JSON.stringify(schedule) ||
+            updatedWeekNumber !== weekNumber) {
             schedule = updatedSchedule;
+            weekNumber = updatedWeekNumber;
+            updateWeekNumberDisplay();
             render();
             try {
                 localStorage.setItem(scheduleStorageKey, JSON.stringify(schedule));
+                localStorage.setItem(weekNumberStorageKey, String(weekNumber));
+                localStorage.removeItem(weekNumberPendingKey);
             } catch (error) {
                 setStatus(`Schedule updated, but this browser could not cache it: ${error.message}`);
                 return;
@@ -395,10 +600,57 @@
                 }
 
                 if (slot.length === 0 && isAdmin) {
-                    const placeholder = document.createElement("span");
-                    placeholder.className = "empty-slot-hint";
-                    placeholder.textContent = "Drop class here";
-                    cell.append(placeholder);
+                    if (!editorReady) {
+                        const placeholder = document.createElement("span");
+                        placeholder.className = "empty-slot-hint";
+                        placeholder.textContent = "Loading schedule...";
+                        cell.append(placeholder);
+                    } else if (addingSlot?.row === rowIndex && addingSlot?.day === dayIndex) {
+                        const form = document.createElement("form");
+                        form.className = "add-lecture-form";
+
+                        const lectureSelect = document.createElement("select");
+                        lectureSelect.name = "lecture";
+                        lectureSelect.setAttribute("aria-label", "Choose a lecture");
+                        lectureSelect.required = true;
+                        const chooseLecture = document.createElement("option");
+                        chooseLecture.value = "";
+                        chooseLecture.textContent = "Choose a lecture";
+                        lectureSelect.append(chooseLecture);
+                        getLectureTemplates().forEach((template, index) => {
+                            const option = document.createElement("option");
+                            option.value = String(index);
+                            option.textContent = isSuperAdmin
+                                ? `${template.course} — ${template.teacher}`
+                                : template.course;
+                            lectureSelect.append(option);
+                        });
+                        form.append(lectureSelect);
+
+                        const actions = document.createElement("div");
+                        actions.className = "add-lecture-actions";
+                        const addButton = document.createElement("button");
+                        addButton.type = "submit";
+                        addButton.textContent = "Add";
+                        const cancelButton = document.createElement("button");
+                        cancelButton.type = "button";
+                        cancelButton.className = "cancel-add-lecture";
+                        cancelButton.textContent = "Cancel";
+                        actions.append(addButton, cancelButton);
+                        form.append(actions);
+                        cell.append(form);
+                    } else {
+                        const addButton = document.createElement("button");
+                        addButton.type = "button";
+                        addButton.className = "add-lecture";
+                        addButton.textContent = "+";
+                        addButton.setAttribute(
+                            "aria-label",
+                            `Add lecture on ${days[dayIndex]} at ${times[rowIndex]}`
+                        );
+                        addButton.title = "Add lecture";
+                        cell.append(addButton);
+                    }
                 }
 
                 slot.forEach((item, eventIndex) => {
@@ -448,6 +700,7 @@
             });
             tableBody.append(tableRow);
         });
+        updateChinaClockAndHighlight();
     }
 
     const save = (debounce = false) => {
@@ -460,7 +713,11 @@
             if (!firebaseReady) {
                 try {
                     localStorage.setItem(scheduleStorageKey, JSON.stringify(schedule));
+                    localStorage.setItem(weekNumberStorageKey, String(weekNumber));
                     hasLocalScheduleChanges = true;
+                    if (hasLocalWeekChanges) {
+                        localStorage.setItem(weekNumberPendingKey, "true");
+                    }
                 } catch (error) {
                     setStatus(`Could not save changes in this browser: ${error.message}`);
                     return;
@@ -469,12 +726,23 @@
                 return;
             }
             const savedSchedule = JSON.stringify(schedule);
-            firebase.setDoc(scheduleRef, { schedule: serializeSchedule(schedule) }).then(() => {
-                if (JSON.stringify(schedule) === savedSchedule) {
+            const savedWeekNumber = weekNumber;
+            firebase.setDoc(scheduleRef, {
+                schedule: serializeSchedule(schedule),
+                weekNumber
+            }).then(() => {
+                const isCurrentSave = JSON.stringify(schedule) === savedSchedule &&
+                    weekNumber === savedWeekNumber;
+                if (isCurrentSave) {
                     hasLocalScheduleChanges = false;
+                    hasLocalWeekChanges = false;
                 }
                 try {
                     localStorage.setItem(scheduleStorageKey, JSON.stringify(schedule));
+                    localStorage.setItem(weekNumberStorageKey, String(weekNumber));
+                    if (isCurrentSave) {
+                        localStorage.removeItem(weekNumberPendingKey);
+                    }
                 } catch (error) {
                     setStatus(`Schedule saved to Firebase, but could not be cached in this browser: ${error.message}`);
                     return;
@@ -526,6 +794,11 @@
             render();
             return;
         }
+        if (targetSlot.length > 0) {
+            clearSelection();
+            setStatus("That time slot already has a lecture. Move this class to an empty slot.");
+            return;
+        }
         const [movedEvent] = sourceSlot.splice(source.eventIndex, 1);
         targetSlot.push(movedEvent);
         selectedSource = null;
@@ -547,6 +820,83 @@
     if (isAdmin) {
         let touchDrag = null;
         let suppressClick = false;
+
+        weekNumberInput?.addEventListener("input", () => {
+            const nextWeekNumber = Number(weekNumberInput.value);
+            if (!isValidWeekNumber(nextWeekNumber)) {
+                return;
+            }
+            weekNumber = nextWeekNumber;
+            hasLocalWeekChanges = true;
+            try {
+                localStorage.setItem(weekNumberStorageKey, String(weekNumber));
+                localStorage.setItem(weekNumberPendingKey, "true");
+            } catch (error) {
+                setStatus(`Week number changed but could not be cached in this browser: ${error.message}`);
+            }
+            updateWeekNumberDisplay();
+            save(true);
+        });
+
+        weekNumberInput?.addEventListener("change", () => {
+            const nextWeekNumber = Number(weekNumberInput.value);
+            if (!isValidWeekNumber(nextWeekNumber)) {
+                weekNumberInput.value = String(weekNumber);
+                setStatus("Week number must be between 1 and 53.");
+            } else {
+                save();
+            }
+        });
+
+        tableBody.addEventListener("submit", (submitEvent) => {
+            const form = submitEvent.target.closest(".add-lecture-form");
+            if (!form) {
+                return;
+            }
+            submitEvent.preventDefault();
+            const row = addingSlot?.row;
+            const day = addingSlot?.day;
+            if (!Number.isInteger(row) || !Number.isInteger(day)) {
+                setStatus("Could not add lecture: the selected schedule slot is no longer available.");
+                addingSlot = null;
+                render();
+                return;
+            }
+
+            const formData = new FormData(form);
+            const selectedTemplate = String(formData.get("lecture") || "");
+            const templateIndex = selectedTemplate === "" ? -1 : Number(selectedTemplate);
+            const templates = getLectureTemplates();
+            const template = Number.isInteger(templateIndex)
+                ? templates[templateIndex]
+                : null;
+            const slot = schedule[row][day];
+            if (!template) {
+                setStatus("Choose a lecture before adding it to the schedule.");
+                return;
+            }
+            if (slot.length !== 0) {
+                addingSlot = null;
+                render();
+                setStatus("Could not add lecture: that schedule slot is no longer empty.");
+                return;
+            }
+
+            const lecture = event(
+                template.course,
+                isSuperAdmin ? template.teacher : adminTeacher,
+                template.weeks,
+                template.location
+            );
+            slot.push(lecture);
+            addingSlot = null;
+            render();
+            if (save()) {
+                publishAnnouncement(
+                    `${lecture.teacher}: ${lecture.course} was added for ${days[day]} at ${times[row]}.`
+                );
+            }
+        });
 
         tableBody.addEventListener("focusin", (focusEvent) => {
             const field = focusEvent.target.closest("[data-field]");
@@ -623,6 +973,28 @@
                 return;
             }
 
+            const addButton = clickEvent.target.closest(".add-lecture");
+            if (addButton) {
+                const cell = addButton.closest("td[data-row][data-day]");
+                const row = Number(cell.dataset.row);
+                const day = Number(cell.dataset.day);
+                if (schedule[row][day].length !== 0) {
+                    setStatus("Classes can only be added to an empty schedule slot.");
+                    return;
+                }
+                selectedSource = null;
+                addingSlot = { row, day };
+                render();
+                tableBody.querySelector(".add-lecture-form select")?.focus();
+                return;
+            }
+
+            if (clickEvent.target.closest(".cancel-add-lecture")) {
+                addingSlot = null;
+                render();
+                return;
+            }
+
             const deleteButton = clickEvent.target.closest(".delete-lecture");
             if (deleteButton) {
                 const card = deleteButton.closest(".schedule-event");
@@ -662,7 +1034,7 @@
                     selected.classList.remove("is-selected");
                 });
                 card.classList.add("is-selected");
-                setStatus("Class selected. Choose a destination cell, or drag it to a new slot.");
+                setStatus("Class selected. Choose an empty destination slot, or drag it to one.");
                 return;
             }
             if (!selectedSource) {
@@ -722,7 +1094,12 @@
             pointerEvent.preventDefault();
             const target = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY)
                 ?.closest("td[data-row][data-day]");
-            if (target && tableBody.contains(target)) {
+            const targetIsEmpty = target &&
+                schedule[Number(target.dataset.row)][Number(target.dataset.day)].length === 0;
+            const targetIsSource = target &&
+                Number(target.dataset.row) === touchDrag.source.row &&
+                Number(target.dataset.day) === touchDrag.source.day;
+            if (target && tableBody.contains(target) && (targetIsEmpty || targetIsSource)) {
                 if (touchDrag.target !== target) {
                     touchDrag.target?.classList.remove("drop-target");
                     target.classList.add("drop-target");
@@ -786,6 +1163,7 @@
                 day: Number(cell.dataset.day),
                 eventIndex: Number(card.dataset.eventIndex)
             };
+            nativeDragSource = source;
             dragEvent.dataTransfer.setData("text/plain", JSON.stringify(source));
             dragEvent.dataTransfer.effectAllowed = "move";
         });
@@ -793,6 +1171,19 @@
         tableBody.addEventListener("dragover", (dragEvent) => {
             const cell = dragEvent.target.closest("td[data-row][data-day]");
             if (cell) {
+                if (!nativeDragSource) {
+                    cell.classList.remove("drop-target");
+                    dragEvent.dataTransfer.dropEffect = "none";
+                    return;
+                }
+                const isSameCell = Number(cell.dataset.row) === nativeDragSource.row &&
+                    Number(cell.dataset.day) === nativeDragSource.day;
+                const isEmpty = schedule[Number(cell.dataset.row)][Number(cell.dataset.day)].length === 0;
+                if (!isEmpty && !isSameCell) {
+                    cell.classList.remove("drop-target");
+                    dragEvent.dataTransfer.dropEffect = "none";
+                    return;
+                }
                 dragEvent.preventDefault();
                 dragEvent.dataTransfer.dropEffect = "move";
                 cell.classList.add("drop-target");
@@ -830,6 +1221,7 @@
         });
 
         tableBody.addEventListener("dragend", () => {
+            nativeDragSource = null;
             tableBody.querySelectorAll(".drop-target").forEach((cell) => {
                 cell.classList.remove("drop-target");
             });
