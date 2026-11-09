@@ -311,6 +311,7 @@
     setStatus("Loading shared schedule from Supabase...");
     let selectedSource = null;
     let saveTimer;
+    let pendingSaveResolve = null;
     let scheduleSaveInFlight = false;
 
     const cacheCurrentState = () => {
@@ -597,64 +598,88 @@
             : "Saving changes in this browser...");
         hasPendingScheduleChanges = true;
         window.clearTimeout(saveTimer);
-        const persist = async () => {
-            saveTimer = undefined;
-            if (!scheduleSync || !syncReady) {
-                try {
-                    localStorage.setItem(scheduleStorageKey, JSON.stringify(schedule));
-                    localStorage.setItem(weekNumberStorageKey, String(weekNumber));
-                } catch (error) {
-                    setStatus(`Could not save changes in this browser: ${error.message}`);
-                    hasPendingScheduleChanges = false;
-                    return;
-                }
-                hasPendingScheduleChanges = false;
-                setStatus("Changes saved in this browser only. Supabase is unavailable.");
-                return;
-            }
-            const savedSchedule = JSON.stringify(schedule);
-            const savedWeekNumber = weekNumber;
-            scheduleSaveInFlight = true;
-            try {
-                const savedState = await scheduleSync.saveSchedule(schedule, weekNumber);
-                const isCurrentSave = JSON.stringify(schedule) === savedSchedule &&
-                    weekNumber === savedWeekNumber;
-                if (isCurrentSave) {
-                    hasPendingScheduleChanges = false;
-                }
-                try {
-                    localStorage.setItem(scheduleStorageKey, JSON.stringify(schedule));
-                    localStorage.setItem(weekNumberStorageKey, String(weekNumber));
-                } catch (error) {
-                    setStatus(`Schedule synced, but could not be cached in this browser: ${error.message}`);
-                    return;
-                }
-                setStatus("Changes saved to Supabase and synced to other devices.");
-            } catch (error) {
-                hasPendingScheduleChanges = false;
-                if (pendingRemoteState) {
-                    applySharedState(pendingRemoteState, "The shared schedule changed; your save was rejected.");
-                    pendingRemoteState = null;
-                }
-                setStatus(`Could not save to Supabase: ${error.message}`);
-            } finally {
-                scheduleSaveInFlight = false;
-                if (pendingRemoteState) {
-                    const remoteState = pendingRemoteState;
-                    pendingRemoteState = null;
-                    applySharedState(remoteState);
-                }
-            }
-        };
-        if (debounce) {
-            saveTimer = window.setTimeout(persist, 350);
-        } else {
-            persist();
+        if (pendingSaveResolve) {
+            pendingSaveResolve(false);
+            pendingSaveResolve = null;
         }
-        return true;
+
+        return new Promise((resolve) => {
+            const persist = async () => {
+                saveTimer = undefined;
+                pendingSaveResolve = null;
+                let succeeded = false;
+                let completionMessage = "";
+
+                if (!scheduleSync || !syncReady) {
+                    try {
+                        localStorage.setItem(scheduleStorageKey, JSON.stringify(schedule));
+                        localStorage.setItem(weekNumberStorageKey, String(weekNumber));
+                        succeeded = true;
+                        hasPendingScheduleChanges = false;
+                        completionMessage = "Changes saved in this browser only. Supabase is unavailable.";
+                    } catch (error) {
+                        hasPendingScheduleChanges = false;
+                        completionMessage = `Could not save changes in this browser: ${error.message}`;
+                    }
+                    setStatus(completionMessage);
+                    resolve(succeeded);
+                    return;
+                }
+
+                const savedSchedule = JSON.stringify(schedule);
+                const savedWeekNumber = weekNumber;
+                scheduleSaveInFlight = true;
+                try {
+                    await scheduleSync.saveSchedule(schedule, weekNumber);
+                    succeeded = true;
+                    if (JSON.stringify(schedule) === savedSchedule && weekNumber === savedWeekNumber) {
+                        hasPendingScheduleChanges = false;
+                    }
+                    try {
+                        localStorage.setItem(scheduleStorageKey, JSON.stringify(schedule));
+                        localStorage.setItem(weekNumberStorageKey, String(weekNumber));
+                        completionMessage = "Changes saved to Supabase and synced to other devices.";
+                    } catch (error) {
+                        completionMessage = `Schedule synced, but could not be cached in this browser: ${error.message}`;
+                    }
+                } catch (error) {
+                    hasPendingScheduleChanges = false;
+                    completionMessage = `Could not save to Supabase: ${error.message}`;
+                    let currentState = pendingRemoteState;
+                    pendingRemoteState = null;
+                    if (!currentState) {
+                        try {
+                            currentState = await scheduleSync.getCurrentState();
+                        } catch (readError) {
+                            completionMessage += ` Could not refresh the shared schedule: ${readError.message}`;
+                        }
+                    }
+                    if (currentState) {
+                        applySharedState(currentState, "Save rejected; showing the latest shared schedule.");
+                    }
+                } finally {
+                    scheduleSaveInFlight = false;
+                    if (pendingRemoteState && !hasPendingScheduleChanges && !saveTimer) {
+                        const remoteState = pendingRemoteState;
+                        pendingRemoteState = null;
+                        applySharedState(remoteState);
+                    }
+                }
+
+                setStatus(completionMessage);
+                resolve(succeeded);
+            };
+
+            if (debounce) {
+                pendingSaveResolve = resolve;
+                saveTimer = window.setTimeout(() => void persist(), 350);
+            } else {
+                void persist();
+            }
+        });
     };
 
-    const moveEvent = (source, target) => {
+    const moveEvent = async (source, target) => {
         if (
             !Number.isInteger(source?.row) ||
             !Number.isInteger(source?.day) ||
@@ -697,8 +722,8 @@
         targetSlot.push(movedEvent);
         selectedSource = null;
         render();
-        if (save()) {
-            publishAnnouncement(
+        if (await save()) {
+            await publishAnnouncement(
                 `${movedEvent.teacher || "A teacher"}: ${movedEvent.course || "A lecture"} moved from ${days[source.day]} at ${times[source.row]} to ${days[target.day]} at ${times[target.row]}.`
             );
         }
@@ -740,7 +765,7 @@
             }
         });
 
-        tableBody.addEventListener("submit", (submitEvent) => {
+        tableBody.addEventListener("submit", async (submitEvent) => {
             const form = submitEvent.target.closest(".add-lecture-form");
             if (!form) {
                 return;
@@ -783,8 +808,8 @@
             slot.push(lecture);
             addingSlot = null;
             render();
-            if (save()) {
-                publishAnnouncement(
+            if (await save()) {
+                await publishAnnouncement(
                     `${lecture.teacher}: ${lecture.course} was added for ${days[day]} at ${times[row]}.`
                 );
             }
@@ -827,7 +852,7 @@
             save(true);
         });
 
-        tableBody.addEventListener("focusout", (focusEvent) => {
+        tableBody.addEventListener("focusout", async (focusEvent) => {
             const field = focusEvent.target.closest("[data-field]");
             const card = field?.closest(".schedule-event");
             const cell = card?.closest("td[data-row][data-day]");
@@ -850,14 +875,14 @@
                 weeks: "weeks",
                 location: "room or location"
             };
-            if (save()) {
-                publishAnnouncement(
+            if (await save()) {
+                await publishAnnouncement(
                     `${item.teacher || "A teacher"}: ${item.course || "A lecture"} updated (${fieldLabels[field.dataset.field] || "class details"}) for ${days[Number(cell.dataset.day)]} at ${times[Number(cell.dataset.row)]}.`
                 );
             }
         });
 
-        tableBody.addEventListener("click", (clickEvent) => {
+        tableBody.addEventListener("click", async (clickEvent) => {
             if (suppressClick) {
                 suppressClick = false;
                 clickEvent.preventDefault();
@@ -905,8 +930,8 @@
                 const [deletedEvent] = schedule[row][day].splice(eventIndex, 1);
                 selectedSource = null;
                 render();
-                if (save()) {
-                    publishAnnouncement(
+                if (await save()) {
+                    await publishAnnouncement(
                         `${deletedEvent.teacher || "A teacher"}: ${deletedEvent.course || "A lecture"} was deleted from ${days[day]} at ${times[row]}.`
                     );
                 }
@@ -1129,14 +1154,14 @@
     }
 
     if (isSuperAdmin) {
-        document.getElementById("reset-schedule")?.addEventListener("click", () => {
+        document.getElementById("reset-schedule")?.addEventListener("click", async () => {
             if (!window.confirm("Restore the original schedule? This will replace your saved changes.")) {
                 return;
             }
             schedule = cloneDefault();
             render();
-            if (save()) {
-                publishAnnouncement("The class schedule was restored to its default timetable.");
+            if (await save()) {
+                await publishAnnouncement("The class schedule was restored to its default timetable.");
             }
         });
     }
