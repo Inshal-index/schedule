@@ -1,0 +1,17 @@
+{
+  "name": "Class-2 Schedule",
+  "short_name": "Class-2",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#efffff",
+  "theme_color": "#efffff",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

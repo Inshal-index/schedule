@@ -309,6 +309,17 @@
     window.setInterval(syncChinaTime, 5 * 60 * 1000);
     window.addEventListener("resize", () => renderAnnouncement(announcement));
     setStatus("Loading shared schedule from Supabase...");
+    const notificationToggle = document.getElementById("notification-toggle");
+    if (notificationToggle) {
+        import("./push-notifications.js").then(({ setupPushNotifications }) => {
+            setupPushNotifications(notificationToggle, document.getElementById("notification-status"));
+        }).catch((error) => {
+            const notificationStatus = document.getElementById("notification-status");
+            if (notificationStatus) {
+                notificationStatus.textContent = `Could not load notifications: ${error.message}`;
+            }
+        });
+    }
     let selectedSource = null;
     let saveTimer;
     let pendingSaveResolve = null;
@@ -397,10 +408,16 @@
             return;
         }
         try {
-            const savedState = await scheduleSync.publishAnnouncement(message);
-            setStatus("Announcement synced to Supabase.");
+            await scheduleSync.publishAnnouncement(message);
         } catch (error) {
             setStatus(`Announcement is shown locally but could not sync: ${error.message}`);
+            return;
+        }
+        try {
+            const result = await scheduleSync.sendPushNotification(message);
+            setStatus(`Announcement synced; mobile notifications sent to ${result.delivered} device(s).`);
+        } catch (error) {
+            setStatus(`Announcement synced to Supabase; mobile push is not available yet: ${error.message}`);
         }
     };
 

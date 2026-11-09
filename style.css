@@ -24,6 +24,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: 1.5rem;
     padding: 0.75rem clamp(1rem, 3vw, 2rem);
     background-color: white;
@@ -585,4 +586,44 @@ thead th:last-child {
     .event-track {
         animation: none;
     }
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.notification-toggle {
+    padding: 0.4rem 0.65rem;
+    border: 1px solid #78a99a;
+    border-radius: 0.3rem;
+    background: #e6fff2;
+    color: #15583d;
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.notification-toggle:hover,
+.notification-toggle:focus-visible {
+    border-color: #16835a;
+    background: #d3ffe8;
+}
+
+.notification-toggle:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
+.notification-status {
+    margin: 0.35rem clamp(1rem, 3vw, 2rem);
+    color: #385868;
+    font-size: 0.8rem;
+}
+
+.notification-status:empty {
+    display: none;
 }

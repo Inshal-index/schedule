@@ -48,6 +48,7 @@ while ($listener.IsListening) {
             ".js"   { "text/javascript; charset=utf-8" }
             ".css"  { "text/css; charset=utf-8" }
             ".json" { "application/json; charset=utf-8" }
+            ".webmanifest" { "application/manifest+json; charset=utf-8" }
             default { "application/octet-stream" }
         }
         $response.Headers["Cache-Control"] = "no-store"

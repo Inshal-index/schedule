@@ -90,6 +90,19 @@ export const connectScheduleSync = async ({ onState, onConnectionStatus }) => {
             }
             return Array.isArray(savedState) ? savedState[0] : savedState;
         },
+        async sendPushNotification(message) {
+            const { data, error: pushError } = await supabase.functions.invoke("send-push-notification", {
+                body: {
+                    title: "Class-2 Schedule",
+                    body: message,
+                    url: new URL("./index.html", window.location.href).href
+                }
+            });
+            if (pushError) {
+                throw pushError;
+            }
+            return data;
+        },
         async getCurrentState() {
             return readCurrentState();
         },
