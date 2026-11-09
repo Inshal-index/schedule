@@ -21,7 +21,7 @@
     <main id="admin-auth" class="content">
         <section id="admin-login" class="auth-card">
             <h1>Admin login</h1>
-            <p class="auth-warning">Sign in with the email address and password created in Firebase Authentication.</p>
+            <p class="auth-warning">Sign in with an account created in Supabase Authentication.</p>
             <form id="admin-login-form">
                 <label>
                     Email
@@ -42,7 +42,7 @@
         <h1>Week <input id="week-number-editor" type="number" min="1" max="53"
             value="9" aria-label="Schedule week number" disabled> Schedule</h1>
         <div class="admin-tools">
-            <p>Add a class with the + button in an empty slot by choosing a lecture. Edit your class details or move it to an empty time slot. Changes sync through Firebase to other devices.</p>
+            <p>Schedule changes sync to Supabase and update on other devices.</p>
             <div class="admin-account-actions">
                 <span id="admin-role-label" class="admin-role-label"></span>
                 <button id="logout-admin" class="reset-button" type="button">Log out</button>
@@ -50,7 +50,7 @@
             </div>
         </div>
         <p id="china-time" class="china-time" aria-live="polite">Getting current China Standard Time...</p>
-        <p id="schedule-status" class="schedule-status" aria-live="polite">Connecting to the shared schedule...</p>
+        <p id="schedule-status" class="schedule-status" aria-live="polite">Loading shared schedule from Supabase...</p>
         <div class="table-wrapper">
             <table class="schedule-table">
                 <thead>

@@ -4,8 +4,8 @@ const adminPanel = document.getElementById("admin-panel");
 const loginForm = document.getElementById("admin-login-form");
 const loginButton = loginForm.querySelector("button[type='submit']");
 const loginError = document.getElementById("login-error");
-let firebase;
-let firebaseReady = false;
+let supabase;
+let supabaseReady = false;
 let editorLoaded = false;
 
 const setLoginError = (message) => {
@@ -13,14 +13,8 @@ const setLoginError = (message) => {
 };
 
 const describeError = (error) => {
-    if (error?.code?.startsWith("auth/api-key-not-valid")) {
-        return "Firebase rejected the API key. Check the web app configuration in firebase.js.";
-    }
-    if (["auth/invalid-credential", "auth/wrong-password"].includes(error?.code)) {
+    if (error?.message === "Invalid login credentials") {
         return "Incorrect email or password.";
-    }
-    if (error?.code === "auth/user-not-found") {
-        return "No Firebase Authentication account exists for this email.";
     }
     return error?.message || "An unexpected error occurred.";
 };
@@ -29,6 +23,7 @@ const showLogin = () => {
     authPage.hidden = false;
     loginPanel.hidden = false;
     adminPanel.hidden = true;
+    loginButton.disabled = !supabaseReady;
     document.body.dataset.admin = "false";
     delete document.body.dataset.adminTeacher;
     delete document.body.dataset.adminRole;
@@ -58,7 +53,7 @@ const showAdmin = (profile) => {
 
 const signOutAfterError = async () => {
     try {
-        await firebase.signOut(firebase.auth);
+        await supabase.auth.signOut();
     } catch (error) {
         console.error("Could not sign out after role lookup failed:", error.message);
         setLoginError(`${loginError.textContent} ${describeError(error)}`);
@@ -72,24 +67,28 @@ const handleAuthenticatedUser = async (user) => {
     }
 
     try {
-        const profileSnapshot = await firebase.getDoc(
-            firebase.doc(firebase.db, "admins", user.uid)
-        );
-        if (!profileSnapshot.exists()) {
+        const { data: profile, error } = await supabase
+            .from("admin_profiles")
+            .select("role, teacher")
+            .eq("user_id", user.id)
+            .maybeSingle();
+        if (error) {
+            throw error;
+        }
+        if (!profile) {
             setLoginError(
-                "This account has no admin role assigned. Ask the project owner to add its UID to the admins collection."
+                "This account has no admin role assigned. Ask the project owner to add its user ID to admin_profiles."
             );
             await signOutAfterError();
             return;
         }
 
-        const profile = profileSnapshot.data();
         const isSuperAdmin = profile.role === "super";
         const isTeacher = profile.role === "teacher" &&
             typeof profile.teacher === "string" &&
             profile.teacher.trim() !== "";
         if (!isSuperAdmin && !isTeacher) {
-            throw new Error("The Firebase admin profile has an invalid role.");
+            throw new Error("The Supabase admin profile has an invalid role.");
         }
 
         setLoginError("");
@@ -105,8 +104,8 @@ const handleAuthenticatedUser = async (user) => {
 loginForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     setLoginError("");
-    if (!firebaseReady) {
-        setLoginError("Firebase is still connecting. Wait a moment and try again.");
+    if (!supabaseReady) {
+        setLoginError("Supabase is still connecting. Wait a moment and try again.");
         return;
     }
 
@@ -115,7 +114,10 @@ loginForm.addEventListener("submit", async (event) => {
     const email = String(formData.get("email") || "").trim();
     const password = String(formData.get("password") || "");
     try {
-        await firebase.signInWithEmailAndPassword(firebase.auth, email, password);
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) {
+            throw error;
+        }
     } catch (error) {
         setLoginError(`Could not sign in: ${describeError(error)}`);
         loginButton.disabled = false;
@@ -124,23 +126,27 @@ loginForm.addEventListener("submit", async (event) => {
 
 document.getElementById("logout-admin").addEventListener("click", async () => {
     try {
-        await firebase.signOut(firebase.auth);
+        const { error } = await supabase.auth.signOut();
+        if (error) {
+            throw error;
+        }
         loginForm.reset();
         setLoginError("");
     } catch (error) {
         document.getElementById("schedule-status").textContent =
-            `Could not log out of Firebase: ${describeError(error)}`;
+            `Could not log out of Supabase: ${describeError(error)}`;
     }
 });
 
-import("./firebase.js").then((firebaseModule) => {
-    firebase = firebaseModule;
-    if (!firebase.auth || !firebase.signInWithEmailAndPassword || !firebase.onAuthStateChanged) {
-        throw new Error("Firebase Authentication did not initialize correctly.");
-    }
-    firebaseReady = true;
+import("./supabase.js").then((supabaseModule) => {
+    supabase = supabaseModule.supabase;
+    supabaseReady = true;
     loginButton.disabled = false;
-    firebase.onAuthStateChanged(firebase.auth, handleAuthenticatedUser);
+    supabase.auth.onAuthStateChange((_event, session) => {
+        window.setTimeout(() => {
+            void handleAuthenticatedUser(session?.user || null);
+        }, 0);
+    });
 }).catch((error) => {
-    setLoginError(`Could not connect to Firebase Authentication: ${describeError(error)}`);
+    setLoginError(`Could not connect to Supabase Authentication: ${describeError(error)}`);
 });
