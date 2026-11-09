@@ -26,6 +26,18 @@ export const setupPushNotifications = (button, status) => {
         return;
     }
 
+    const isSecureContext = window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    if (!isSecureContext) {
+        button.disabled = true;
+        setStatus(status, "Mobile push notifications require an HTTPS page or localhost.");
+        console.warn("Push notifications disabled: page is not secure context.", {
+            protocol: location.protocol,
+            hostname: location.hostname,
+            href: location.href
+        });
+        return;
+    }
+
     let subscription = null;
     const updateButton = () => {
         button.textContent = subscription ? "Turn off mobile notifications" : "Enable mobile notifications";
@@ -33,10 +45,12 @@ export const setupPushNotifications = (button, status) => {
     };
 
     const saveSubscription = async (nextSubscription) => {
+        console.log("Registering push subscription:", nextSubscription.toJSON());
         const { error } = await supabase.functions.invoke("register-push-subscription", {
             body: { subscription: nextSubscription.toJSON() }
         });
         if (error) {
+            console.error("register-push-subscription failed:", error);
             throw error;
         }
     };
@@ -53,12 +67,14 @@ export const setupPushNotifications = (button, status) => {
     void navigator.serviceWorker.register(new URL("./service-worker.js", window.location.href), {
         scope: new URL(".", window.location.href).pathname
     }).then(async (registration) => {
+        console.log("Service worker registered with scope:", registration.scope);
         subscription = await registration.pushManager.getSubscription();
         updateButton();
         setStatus(status, subscription
             ? "Notifications are enabled on this device."
             : "Notifications are off on this device.");
     }).catch((error) => {
+        console.error("serviceWorker registration failed:", error);
         button.disabled = true;
         setStatus(status, `Could not prepare notifications: ${error.message}`);
     });
@@ -80,6 +96,7 @@ export const setupPushNotifications = (button, status) => {
                     return;
                 }
                 const registration = await navigator.serviceWorker.ready;
+                console.log("Subscribing with VAPID key:", vapidPublicKey);
                 subscription = await registration.pushManager.subscribe({
                     userVisibleOnly: true,
                     applicationServerKey: toUint8Array(vapidPublicKey)
@@ -89,6 +106,13 @@ export const setupPushNotifications = (button, status) => {
                 setStatus(status, "Notifications are enabled on this device.");
             }
         } catch (error) {
+            console.error("Push registration failed:", {
+                name: error?.name,
+                message: error?.message,
+                stack: error?.stack,
+                protocol: location.protocol,
+                href: location.href
+            });
             subscription = await navigator.serviceWorker.ready
                 .then((registration) => registration.pushManager.getSubscription())
                 .catch(() => null);
