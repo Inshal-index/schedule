@@ -109,10 +109,9 @@ begin
             jsonb_build_object(
                 'row', schedule_rows.row_index,
                 'day', schedule_days.day_index,
-                'slot', schedule_slots.slot_index,
                 'event', schedule_events.event_value
             ) order by schedule_rows.row_index, schedule_days.day_index,
-                schedule_slots.slot_index, schedule_events.event_value::text
+                schedule_events.event_value::text
         ), '[]'::jsonb)
         into v_old_other_events
         from jsonb_array_elements(v_current.schedule) with ordinality
@@ -120,8 +119,6 @@ begin
         cross join lateral jsonb_array_elements(schedule_rows.row_value) with ordinality
             as schedule_days(day_value, day_index)
         cross join lateral jsonb_array_elements(schedule_days.day_value) with ordinality
-            as schedule_slots(slot_value, slot_index)
-        cross join lateral jsonb_array_elements(schedule_slots.slot_value) with ordinality
             as schedule_events(event_value, event_index)
         where upper(btrim(schedule_events.event_value ->> 'teacher'))
             is distinct from upper(btrim(v_teacher));
@@ -130,10 +127,9 @@ begin
             jsonb_build_object(
                 'row', schedule_rows.row_index,
                 'day', schedule_days.day_index,
-                'slot', schedule_slots.slot_index,
                 'event', schedule_events.event_value
             ) order by schedule_rows.row_index, schedule_days.day_index,
-                schedule_slots.slot_index, schedule_events.event_value::text
+                schedule_events.event_value::text
         ), '[]'::jsonb)
         into v_new_other_events
         from jsonb_array_elements(p_schedule) with ordinality
@@ -141,8 +137,6 @@ begin
         cross join lateral jsonb_array_elements(schedule_rows.row_value) with ordinality
             as schedule_days(day_value, day_index)
         cross join lateral jsonb_array_elements(schedule_days.day_value) with ordinality
-            as schedule_slots(slot_value, slot_index)
-        cross join lateral jsonb_array_elements(schedule_slots.slot_value) with ordinality
             as schedule_events(event_value, event_index)
         where upper(btrim(schedule_events.event_value ->> 'teacher'))
             is distinct from upper(btrim(v_teacher));

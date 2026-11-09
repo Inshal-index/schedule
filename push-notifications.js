@@ -1,6 +1,6 @@
 import { supabase } from "./supabase.js";
 
-const vapidPublicKey = "REPLACE_WITH_VAPID_PUBLIC_KEY";
+const vapidPublicKey = "BJdiZMDevP5pgcx9CsF3QVyXmrcoJDyxnwcmAePUAMJm-CkwP8r_G8fsub16AHGH4ttdRfIYZoWPddjZsopT6jY";
 const toUint8Array = (base64Url) => {
     const padding = "=".repeat((4 - base64Url.length % 4) % 4);
     const base64 = (base64Url + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -23,13 +23,6 @@ export const setupPushNotifications = (button, status) => {
         "Notification" in window;
     if (!isSupported) {
         button.hidden = true;
-        return;
-    }
-
-    if (vapidPublicKey === "REPLACE_WITH_VAPID_PUBLIC_KEY") {
-        button.disabled = true;
-        button.textContent = "Mobile notifications setup pending";
-        setStatus(status, "Push notifications are not configured yet.");
         return;
     }
 
