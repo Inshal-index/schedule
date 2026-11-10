@@ -1,6 +1,7 @@
 import { supabase } from "./supabase.js";
 
 const vapidPublicKey = "BJdiZMDevP5pgcx9CsF3QVyXmrcoJDyxnwcmAePUAMJm-CkwP8r_G8fsub16AHGH4ttdRfIYZoWPddjZsopT6jY";
+
 const toUint8Array = (base64Url) => {
     const padding = "=".repeat((4 - base64Url.length % 4) % 4);
     const base64 = (base64Url + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -26,31 +27,32 @@ export const setupPushNotifications = (button, status) => {
         return;
     }
 
-    const isSecureContext = window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1";
-    if (!isSecureContext) {
+    if (!window.isSecureContext) {
         button.disabled = true;
         setStatus(status, "Mobile push notifications require an HTTPS page or localhost.");
-        console.warn("Push notifications disabled: page is not secure context.", {
-            protocol: location.protocol,
-            hostname: location.hostname,
-            href: location.href
-        });
         return;
     }
 
+    let registration = null;
     let subscription = null;
+    let subscriptionSaved = false;
+    let isBusy = true;
+
     const updateButton = () => {
-        button.textContent = subscription ? "Turn off mobile notifications" : "Enable mobile notifications";
-        button.setAttribute("aria-pressed", String(Boolean(subscription)));
+        button.textContent = subscription
+            ? subscriptionSaved
+                ? "Turn off mobile notifications"
+                : "Finish enabling mobile notifications"
+            : "Enable mobile notifications";
+        button.setAttribute("aria-pressed", String(Boolean(subscription && subscriptionSaved)));
+        button.disabled = isBusy || !registration;
     };
 
     const saveSubscription = async (nextSubscription) => {
-        console.log("Registering push subscription:", nextSubscription.toJSON());
         const { error } = await supabase.functions.invoke("register-push-subscription", {
             body: { subscription: nextSubscription.toJSON() }
         });
         if (error) {
-            console.error("register-push-subscription failed:", error);
             throw error;
         }
     };
@@ -64,62 +66,90 @@ export const setupPushNotifications = (button, status) => {
         }
     };
 
-    void navigator.serviceWorker.register(new URL("./service-worker.js", window.location.href), {
-        scope: new URL(".", window.location.href).pathname
-    }).then(async (registration) => {
-        console.log("Service worker registered with scope:", registration.scope);
-        subscription = await registration.pushManager.getSubscription();
-        updateButton();
-        setStatus(status, subscription
-            ? "Notifications are enabled on this device."
-            : "Notifications are off on this device.");
-    }).catch((error) => {
-        console.error("serviceWorker registration failed:", error);
-        button.disabled = true;
-        setStatus(status, `Could not prepare notifications: ${error.message}`);
-    });
+    const showSubscriptionStatus = () => {
+        if (subscription && subscriptionSaved) {
+            setStatus(status, "Notifications are enabled on this device.");
+        } else if (subscription) {
+            setStatus(status, "This device is subscribed, but its registration could not be synced.");
+        } else if (Notification.permission === "denied") {
+            setStatus(status, "Notifications are blocked in this browser's settings.");
+        } else {
+            setStatus(status, "Notifications are off on this device.");
+        }
+    };
+
+    void (async () => {
+        try {
+            registration = await navigator.serviceWorker.register(
+                new URL("./service-worker.js", window.location.href),
+                { scope: new URL(".", window.location.href).pathname }
+            );
+            subscription = await registration.pushManager.getSubscription();
+            updateButton();
+
+            if (subscription) {
+                try {
+                    await saveSubscription(subscription);
+                    subscriptionSaved = true;
+                } catch (error) {
+                    console.error("Could not sync this device's push subscription:", error);
+                }
+            }
+            isBusy = false;
+            updateButton();
+            showSubscriptionStatus();
+        } catch (error) {
+            isBusy = false;
+            console.error("Could not prepare push notifications:", error);
+            button.disabled = true;
+            setStatus(status, `Could not prepare notifications: ${error.message}`);
+        }
+    })();
 
     button.addEventListener("click", async () => {
-        button.disabled = true;
+        if (!registration || isBusy) {
+            return;
+        }
+        isBusy = true;
+        updateButton();
+
         try {
-            if (subscription) {
-                const endpoint = subscription.endpoint;
+            if (subscription && subscriptionSaved) {
+                await removeSubscription(subscription.endpoint);
                 await subscription.unsubscribe();
-                await removeSubscription(endpoint);
                 subscription = null;
-                updateButton();
+                subscriptionSaved = false;
                 setStatus(status, "Notifications are off on this device.");
+            } else if (subscription) {
+                await saveSubscription(subscription);
+                subscriptionSaved = true;
+                setStatus(status, "Notifications are enabled on this device.");
             } else {
                 const permission = await Notification.requestPermission();
                 if (permission !== "granted") {
-                    setStatus(status, "Notification permission was not granted.");
+                    showSubscriptionStatus();
                     return;
                 }
-                const registration = await navigator.serviceWorker.ready;
-                console.log("Subscribing with VAPID key:", vapidPublicKey);
                 subscription = await registration.pushManager.subscribe({
                     userVisibleOnly: true,
                     applicationServerKey: toUint8Array(vapidPublicKey)
                 });
                 await saveSubscription(subscription);
-                updateButton();
+                subscriptionSaved = true;
                 setStatus(status, "Notifications are enabled on this device.");
             }
         } catch (error) {
-            console.error("Push registration failed:", {
-                name: error?.name,
-                message: error?.message,
-                stack: error?.stack,
-                protocol: location.protocol,
-                href: location.href
-            });
-            subscription = await navigator.serviceWorker.ready
-                .then((registration) => registration.pushManager.getSubscription())
-                .catch(() => null);
-            updateButton();
+            console.error("Could not update push notifications:", error);
+            subscription = await registration.pushManager.getSubscription().catch(() => null);
+            subscriptionSaved = false;
+            showSubscriptionStatus();
             setStatus(status, `Could not update notifications: ${error.message}`);
         } finally {
-            button.disabled = false;
+            isBusy = false;
+            updateButton();
         }
     });
+
+    updateButton();
+    setStatus(status, "Preparing notifications...");
 };

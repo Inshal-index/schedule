@@ -91,7 +91,18 @@ export const connectScheduleSync = async ({ onState, onConnectionStatus }) => {
             return Array.isArray(savedState) ? savedState[0] : savedState;
         },
         async sendPushNotification(message) {
+            const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+            if (sessionError) {
+                throw sessionError;
+            }
+            if (!sessionData?.session?.access_token) {
+                throw new Error("Admin sign-in is required.");
+            }
+
             const { data, error: pushError } = await supabase.functions.invoke("send-push-notification", {
+                headers: {
+                    Authorization: `Bearer ${sessionData.session.access_token}`
+                },
                 body: {
                     title: "Class-2 Schedule",
                     body: message,

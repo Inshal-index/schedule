@@ -415,7 +415,22 @@
         }
         try {
             const result = await scheduleSync.sendPushNotification(message);
-            setStatus(`Announcement synced; mobile notifications sent to ${result.delivered} device(s).`);
+            const attempted = Number(result?.attempted);
+            const delivered = Number(result?.delivered);
+            const failed = Number(result?.failed ?? attempted - delivered);
+            if (!Number.isInteger(attempted) || !Number.isInteger(delivered) ||
+                !Number.isInteger(failed) || attempted < 0 || delivered < 0 || failed < 0) {
+                throw new Error("The push service returned an invalid delivery summary.");
+            }
+            if (attempted === 0) {
+                setStatus("Announcement synced; no devices have notifications enabled.");
+            } else if (delivered === attempted) {
+                setStatus(`Announcement synced; notifications sent to ${delivered} device(s).`);
+            } else if (delivered > 0) {
+                setStatus(`Announcement synced; notifications sent to ${delivered} of ${attempted} device(s), ${failed} could not be reached.`);
+            } else {
+                setStatus(`Announcement synced, but none of ${attempted} device(s) could be reached.`);
+            }
         } catch (error) {
             setStatus(`Announcement synced to Supabase; mobile push is not available yet: ${error.message}`);
         }
@@ -757,6 +772,10 @@
         let touchDrag = null;
         let suppressClick = false;
 
+        weekNumberInput?.addEventListener("focus", () => {
+            weekNumberInput.dataset.originalValue = String(weekNumber);
+        });
+
         weekNumberInput?.addEventListener("input", () => {
             const nextWeekNumber = Number(weekNumberInput.value);
             if (!isValidWeekNumber(nextWeekNumber)) {
@@ -772,13 +791,19 @@
             save(true);
         });
 
-        weekNumberInput?.addEventListener("change", () => {
+        weekNumberInput?.addEventListener("change", async () => {
             const nextWeekNumber = Number(weekNumberInput.value);
             if (!isValidWeekNumber(nextWeekNumber)) {
                 weekNumberInput.value = String(weekNumber);
                 setStatus("Week number must be between 1 and 53.");
             } else {
-                save();
+                const previousWeekNumber = Number(
+                    weekNumberInput.dataset.originalValue ?? weekNumber
+                );
+                delete weekNumberInput.dataset.originalValue;
+                if (await save() && previousWeekNumber !== nextWeekNumber) {
+                    await publishAnnouncement(`The class schedule is now on Week ${nextWeekNumber}.`);
+                }
             }
         });
 

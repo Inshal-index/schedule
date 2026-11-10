@@ -7,4 +7,7 @@ create table if not exists public.push_subscriptions (
 );
 
 alter table public.push_subscriptions enable row level security;
-revoke all on table public.push_subscriptions from anon, authenticated;
+
+grant usage on schema public to service_role;
+grant select, insert, update, delete on table public.push_subscriptions to service_role;
+grant select on table public.admin_profiles to service_role;
