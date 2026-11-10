@@ -1,11 +1,13 @@
 import { supabase } from "./supabase.js";
 
-const vapidPublicKey = "BJdiZMDevP5pgcx9CsF3QVyXmrcoJDyxnwcmAePUAMJm-CkwP8r_G8fsub16AHGH4ttdRfIYZoWPddjZsopT6jY";
-
 const toUint8Array = (base64Url) => {
     const padding = "=".repeat((4 - base64Url.length % 4) % 4);
     const base64 = (base64Url + padding).replace(/-/g, "+").replace(/_/g, "/");
-    return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    const key = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    if (key.length !== 65 || key[0] !== 4) {
+        throw new Error("The server returned an invalid VAPID public key.");
+    }
+    return key;
 };
 
 const setStatus = (element, message) => {
@@ -55,6 +57,19 @@ export const setupPushNotifications = (button, status) => {
         if (error) {
             throw error;
         }
+    };
+
+    const getVapidPublicKey = async () => {
+        const { data, error } = await supabase.functions.invoke("register-push-subscription", {
+            body: { action: "get-vapid-public-key" }
+        });
+        if (error) {
+            throw error;
+        }
+        if (typeof data?.vapidPublicKey !== "string" || !data.vapidPublicKey) {
+            throw new Error("The push service did not provide its VAPID public key.");
+        }
+        return toUint8Array(data.vapidPublicKey);
     };
 
     const removeSubscription = async (endpoint) => {
@@ -112,9 +127,11 @@ export const setupPushNotifications = (button, status) => {
         }
         isBusy = true;
         updateButton();
+        let operation = "update notification settings";
 
         try {
             if (subscription && subscriptionSaved) {
+                operation = "remove the device registration";
                 await removeSubscription(subscription.endpoint);
                 await subscription.unsubscribe();
                 subscription = null;
@@ -130,20 +147,31 @@ export const setupPushNotifications = (button, status) => {
                     showSubscriptionStatus();
                     return;
                 }
+                operation = "load the server's VAPID key";
+                const applicationServerKey = await getVapidPublicKey();
+                operation = "create the browser push subscription";
                 subscription = await registration.pushManager.subscribe({
                     userVisibleOnly: true,
-                    applicationServerKey: toUint8Array(vapidPublicKey)
+                    applicationServerKey
                 });
+                operation = "save the device registration";
                 await saveSubscription(subscription);
                 subscriptionSaved = true;
                 setStatus(status, "Notifications are enabled on this device.");
             }
         } catch (error) {
-            console.error("Could not update push notifications:", error);
+            console.error(`Could not ${operation}:`, error);
             subscription = await registration.pushManager.getSubscription().catch(() => null);
             subscriptionSaved = false;
             showSubscriptionStatus();
-            setStatus(status, `Could not update notifications: ${error.message}`);
+            if (operation === "create the browser push subscription") {
+                setStatus(
+                    status,
+                    "The browser's push service rejected the subscription. Check that the VAPID public/private keys in Supabase are a matching pair, then retry with a supported browser and a working network."
+                );
+            } else {
+                setStatus(status, `Could not ${operation}: ${error.message}`);
+            }
         } finally {
             isBusy = false;
             updateButton();

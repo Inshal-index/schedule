@@ -28,9 +28,8 @@ The website is hosted under `/schedule/`; keep the service worker at `/schedule/
 
 1. Run `supabase-push.sql` in the Supabase SQL Editor. The subscription table has RLS enabled and grants no direct browser access.
 2. Generate a VAPID key pair on a trusted local machine with `npx web-push generate-vapid-keys`. Do not commit the private key or send it in chat.
-3. Replace the public key in `push-notifications.js` with the generated VAPID public key.
-4. In a terminal, link the Supabase CLI to this project, then set the Edge Function secrets `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` (a `mailto:` contact). Keep the private key only in Supabase secrets.
-5. Deploy `register-push-subscription` with JWT verification disabled because viewers opt in anonymously. Deploy `send-push-notification` with JWT verification enabled; it checks the signed-in user against `admin_profiles`.
-6. Publish the changed website files to GitHub Pages. On a phone, open `https://inshal-index.github.io/schedule/`, opt in, and allow notifications. Existing browser subscriptions are synced to Supabase when the page loads. On iPhone/iPad, first add the site to the Home Screen and open it there.
+3. In a terminal, link the Supabase CLI to this project, then set the Edge Function secrets `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` (a `mailto:` contact). Keep the private key only in Supabase secrets. The public page retrieves the public key from the registration function, so it always uses the same configured key pair as the sender.
+4. Deploy `register-push-subscription` with JWT verification disabled because viewers opt in anonymously. Deploy `send-push-notification` with JWT verification enabled; it checks the signed-in user against `admin_profiles`.
+5. Publish the changed website files to GitHub Pages. On a phone, open `https://inshal-index.github.io/schedule/`, opt in, and allow notifications. Existing browser subscriptions are synced to Supabase when the page loads. On iPhone/iPad, first add the site to the Home Screen and open it there.
 
 Push notifications are sent after a schedule edit, class addition/removal/move, reset, or week-number change has saved successfully. Delivery status reports how many registered devices were reached. The public page only stores or removes its push endpoint through the registration Edge Function; it cannot query the private subscription table directly.

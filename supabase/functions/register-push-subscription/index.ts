@@ -38,6 +38,15 @@ Deno.serve(async (request) => {
             return Response.json({ error: "A subscription request is required." }, { status: 400, headers });
         }
 
+        if (body.action === "get-vapid-public-key") {
+            const vapidPublicKey = Deno.env.get("VAPID_PUBLIC_KEY");
+            if (!vapidPublicKey) {
+                console.error("VAPID_PUBLIC_KEY is not configured.");
+                return Response.json({ error: "Push notifications are not configured on the server." }, { status: 503, headers });
+            }
+            return Response.json({ vapidPublicKey }, { headers });
+        }
+
         if (body.action === "remove") {
             const endpoint = typeof body.endpoint === "string" ? body.endpoint : "";
             if (!endpoint) {
